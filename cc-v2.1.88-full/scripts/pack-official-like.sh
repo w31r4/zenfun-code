@@ -35,53 +35,11 @@ if [[ -f "$ROOT_DIR/dist/cli.js.map" ]]; then
   cp "$ROOT_DIR/dist/cli.js.map" "$OUT_DIR/cli.js.map"
 fi
 
-# Bundle minimal runtime externals so artifact can run without install.
-# Current build keeps zod external for correctness.
+# Bundle runtime externals so artifact can run without install.
 if [[ "$MODE" == "vendor" ]]; then
   rm -rf "$OUT_DIR/node_modules"
-  mkdir -p "$OUT_DIR/node_modules"
-  rm -rf "$OUT_DIR/node_modules/zod"
-  cp -R "$ROOT_DIR/node_modules/zod" "$OUT_DIR/node_modules/zod"
-  rm -rf "$OUT_DIR/node_modules/@anthropic-ai/sandbox-runtime"
-  mkdir -p "$OUT_DIR/node_modules/@anthropic-ai"
-  cp -R "$ROOT_DIR/node_modules/@anthropic-ai/sandbox-runtime" "$OUT_DIR/node_modules/@anthropic-ai/sandbox-runtime"
-
-  copy_if_exists() {
-    local src="$1"
-    local dest="$2"
-    if [[ -e "$src" ]]; then
-      mkdir -p "$(dirname "$dest")"
-      rm -rf "$dest"
-      cp -R "$src" "$dest"
-      echo "  bundled: ${dest#$OUT_DIR/}"
-    fi
-  }
-
-  echo "Bundling runtime external packages..."
-
-  # Optional/runtime externals used by current build config.
-  copy_if_exists "$ROOT_DIR/node_modules/tree-sitter" "$OUT_DIR/node_modules/tree-sitter"
-  copy_if_exists "$ROOT_DIR/node_modules/tree-sitter-bash" "$OUT_DIR/node_modules/tree-sitter-bash"
-  copy_if_exists "$ROOT_DIR/node_modules/fsevents" "$OUT_DIR/node_modules/fsevents"
-
-  # Native tokenizer variants (if installed).
-  if [[ -d "$ROOT_DIR/node_modules/@anthropic-ai" ]]; then
-    shopt -s nullglob
-    for pkg in "$ROOT_DIR"/node_modules/@anthropic-ai/tokenizer-*; do
-      copy_if_exists "$pkg" "$OUT_DIR/node_modules/@anthropic-ai/$(basename "$pkg")"
-    done
-    shopt -u nullglob
-  fi
-
-  # Native sharp/runtime variants (if installed).
-  if [[ -d "$ROOT_DIR/node_modules/@img" ]]; then
-    shopt -s nullglob
-    pkg_candidates=( "$ROOT_DIR"/node_modules/@img/sharp-* "$ROOT_DIR"/node_modules/@img/sharp-libvips-* )
-    shopt -u nullglob
-    for pkg in $(printf '%s\n' "${pkg_candidates[@]}" | sort -u); do
-      copy_if_exists "$pkg" "$OUT_DIR/node_modules/@img/$(basename "$pkg")"
-    done
-  fi
+  cp -R "$ROOT_DIR/node_modules" "$OUT_DIR/node_modules"
+  echo "Bundled full node_modules runtime"
 else
   rm -rf "$OUT_DIR/node_modules"
 fi
@@ -110,7 +68,12 @@ cat > "$OUT_DIR/package.json" <<'JSON'
   "description": "Rebuilt Claude Code package from local recovered source.",
   "dependencies": {
     "zod": "^4.3.6",
-    "@anthropic-ai/sandbox-runtime": "^0.0.44"
+    "@anthropic-ai/sandbox-runtime": "^0.0.44",
+    "@anthropic-ai/mcpb": "^2.1.2",
+    "@aws-sdk/credential-providers": "^3.1020.0",
+    "cacache": "^20.0.4",
+    "cli-highlight": "^2.1.11",
+    "image-processor-napi": "^0.0.1"
   },
   "optionalDependencies": {
     "@img/sharp-darwin-arm64": "^0.34.5",

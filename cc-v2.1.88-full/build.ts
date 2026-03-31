@@ -11,22 +11,15 @@ import { builtinModules } from 'module'
 import { resolve, join } from 'path'
 
 // ── Feature flags ──
-const ENABLED_FEATURES = new Set([
-  'BUILTIN_EXPLORE_PLAN_AGENTS',
-  'DUMP_SYSTEM_PROMPT',
-  'TRANSCRIPT_CLASSIFIER',
-  'COMPACTION_REMINDERS',
-  'PROMPT_CACHE_BREAK_DETECTION',
-  'EXTRACT_MEMORIES',
-  'TREE_SITTER_BASH',
-  'BRIDGE_MODE',
-  'COMMIT_ATTRIBUTION',
-  'SLOW_OPERATION_LOGGING',
-  'HISTORY_PICKER',
-  'HISTORY_SNIP',
-  'HOOK_PROMPTS',
-  'CONNECTOR_TEXT',
-  'TOKEN_BUDGET',
+// Full-feature build policy: enable every compile-time feature(...) gate found
+// in source except a short denylist of clearly non-production/internal toggles.
+const EXCLUDED_FEATURES = new Set([
+  'ABLATION_BASELINE', // experiment control arm, not a user-facing capability
+  'ALLOW_TEST_VERSIONS', // updater/dev test path
+  'HARD_FAIL', // deliberate fault-injection behavior
+  'OVERFLOW_TEST_TOOL', // internal test tool
+  'IS_LIBC_GLIBC', // platform marker (must not be globally forced on)
+  'IS_LIBC_MUSL', // platform marker (must not be globally forced on)
 ])
 
 // ── Build-time macros ──
@@ -44,6 +37,7 @@ const MACROS: Record<string, string> = {
 const STRICT_PARITY = process.env.CC_STRICT_PARITY === '1'
 
 const stubbedImports = new Map<string, Set<string>>()
+const discoveredFeatureFlags = new Set<string>()
 function recordStub(specifier: string, importer?: string) {
   if (!stubbedImports.has(specifier)) {
     stubbedImports.set(specifier, new Set())
@@ -70,6 +64,11 @@ function scanDir(dir: string) {
       scanDir(full)
     } else if (/\.(ts|tsx)$/.test(entry)) {
       const text = readFileSync(full, 'utf-8')
+      const featureRe = /feature\(\s*['"]([^'"]+)['"]\s*\)/g
+      let fm: RegExpExecArray | null
+      while ((fm = featureRe.exec(text)) !== null) {
+        discoveredFeatureFlags.add(fm[1])
+      }
       // Skip `import type { ... }` — only match value imports
       const re = /import\s+(?!type\s)\{([^}]+)\}\s*from\s*['"]([^'"]+)['"]/g
       let m
@@ -94,6 +93,19 @@ function scanDir(dir: string) {
 }
 scanDir('./src')
 console.log(`  Found ${allImports.size} unique module specifiers`)
+const enabledFeatureList = [...discoveredFeatureFlags]
+  .filter(name => !EXCLUDED_FEATURES.has(name))
+  .sort((a, b) => a.localeCompare(b))
+const excludedDiscoveredFeatures = [...discoveredFeatureFlags]
+  .filter(name => EXCLUDED_FEATURES.has(name))
+  .sort((a, b) => a.localeCompare(b))
+const ENABLED_FEATURES = new Set(enabledFeatureList)
+console.log(
+  `  Feature gates: enabled ${enabledFeatureList.length}, excluded ${excludedDiscoveredFeatures.length}`,
+)
+if (excludedDiscoveredFeatures.length > 0) {
+  console.log(`  Excluded features: ${excludedDiscoveredFeatures.join(', ')}`)
+}
 
 function generateStub(modulePath: string): string {
   if (modulePath === '@anthropic-ai/sandbox-runtime') {

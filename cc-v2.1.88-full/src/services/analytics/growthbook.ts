@@ -24,6 +24,7 @@ import {
   is1PEventLoggingEnabled,
   logGrowthBookExperimentTo1P,
 } from './firstPartyEventLogger.js'
+import { isEnvTruthy } from '../../utils/envUtils.js'
 
 /**
  * User attributes sent to GrowthBook for targeting.
@@ -158,34 +159,114 @@ export function onGrowthBookRefresh(
 
 /**
  * Parse env var overrides for GrowthBook features.
- * Set CLAUDE_INTERNAL_FC_OVERRIDES to a JSON object mapping feature keys to values
- * to bypass remote eval and disk cache. Useful for eval harnesses that need to
- * test specific feature flag configurations. Only active when USER_TYPE is 'ant'.
  *
- * Example: CLAUDE_INTERNAL_FC_OVERRIDES='{"my_feature": true, "my_config": {"key": "val"}}'
+ * Supported env vars:
+ * - CLAUDE_CODE_GB_OVERRIDES (all builds): JSON object mapping gate/config keys
+ *   to override values.
+ * - CLAUDE_INTERNAL_FC_OVERRIDES (legacy ant-only): merged on top when USER_TYPE=ant.
  */
 let envOverrides: Record<string, unknown> | null = null
 let envOverridesParsed = false
+let forceEnableAllGateExcludeSet: Set<string> | null = null
+
+const FORCE_ENABLE_ALL_GATES_DEFAULT_EXCLUDES = new Set([
+  // Kill switches / disable toggles should not be force-enabled.
+  'tengu_amber_quartz_disabled',
+  'tengu_compact_line_prefix_killswitch',
+  'tengu_read_dedup_killswitch',
+  'tengu_disable_keepalive_on_econnreset',
+  'tengu_disable_streaming_to_non_streaming_fallback',
+  'tengu_penguins_off',
+])
+
+function parseJsonOverrides(
+  raw: string,
+  envName: string,
+): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(raw)
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error(`${envName} must be a JSON object`)
+    }
+    return parsed as Record<string, unknown>
+  } catch (error) {
+    logError(
+      new Error(
+        `GrowthBook: Failed to parse ${envName}: ${raw}. ${toError(error).message}`,
+      ),
+    )
+    return null
+  }
+}
+
+function getForceEnableAllGateExcludeSet(): Set<string> {
+  if (!forceEnableAllGateExcludeSet) {
+    forceEnableAllGateExcludeSet = new Set(FORCE_ENABLE_ALL_GATES_DEFAULT_EXCLUDES)
+    const raw = process.env.CLAUDE_CODE_ENABLE_ALL_GATES_EXCLUDE
+    if (raw) {
+      for (const key of raw.split(',')) {
+        const normalized = key.trim()
+        if (normalized.length > 0) {
+          forceEnableAllGateExcludeSet.add(normalized)
+        }
+      }
+    }
+  }
+  return forceEnableAllGateExcludeSet
+}
+
+function isForceEnableAllGatesEnabled(): boolean {
+  const raw = process.env.CLAUDE_CODE_ENABLE_ALL_GATES
+  // Zenfun full-feature default: on unless explicitly disabled.
+  return raw === undefined ? true : isEnvTruthy(raw)
+}
+
+function getForceEnabledGateValue<T>(feature: string, defaultValue: T): T | undefined {
+  if (!isForceEnableAllGatesEnabled()) {
+    return undefined
+  }
+  if (getForceEnableAllGateExcludeSet().has(feature)) {
+    return undefined
+  }
+  // Only auto-force boolean gates. Dynamic config objects keep defaults unless
+  // explicitly overridden via CLAUDE_CODE_GB_OVERRIDES.
+  if (typeof defaultValue === 'boolean') {
+    return true as T
+  }
+  return undefined
+}
 
 function getEnvOverrides(): Record<string, unknown> | null {
   if (!envOverridesParsed) {
     envOverridesParsed = true
+    const mergedOverrides: Record<string, unknown> = {}
+    let hasAnyOverride = false
+
+    const publicRaw = process.env.CLAUDE_CODE_GB_OVERRIDES
+    if (publicRaw) {
+      const parsed = parseJsonOverrides(publicRaw, 'CLAUDE_CODE_GB_OVERRIDES')
+      if (parsed) {
+        Object.assign(mergedOverrides, parsed)
+        hasAnyOverride = true
+      }
+    }
+
     if (process.env.USER_TYPE === 'ant') {
       const raw = process.env.CLAUDE_INTERNAL_FC_OVERRIDES
       if (raw) {
-        try {
-          envOverrides = JSON.parse(raw) as Record<string, unknown>
-          logForDebugging(
-            `GrowthBook: Using env var overrides for ${Object.keys(envOverrides!).length} features: ${Object.keys(envOverrides!).join(', ')}`,
-          )
-        } catch {
-          logError(
-            new Error(
-              `GrowthBook: Failed to parse CLAUDE_INTERNAL_FC_OVERRIDES: ${raw}`,
-            ),
-          )
+        const parsed = parseJsonOverrides(raw, 'CLAUDE_INTERNAL_FC_OVERRIDES')
+        if (parsed) {
+          Object.assign(mergedOverrides, parsed)
+          hasAnyOverride = true
         }
       }
+    }
+
+    envOverrides = hasAnyOverride ? mergedOverrides : null
+    if (envOverrides && process.env.USER_TYPE === 'ant') {
+      logForDebugging(
+        `GrowthBook: Using env var overrides for ${Object.keys(envOverrides).length} features: ${Object.keys(envOverrides).join(', ')}`,
+      )
     }
   }
   return envOverrides
@@ -681,6 +762,10 @@ async function getFeatureValueInternal<T>(
   if (configOverrides && feature in configOverrides) {
     return configOverrides[feature] as T
   }
+  const forceEnabled = getForceEnabledGateValue(feature, defaultValue)
+  if (forceEnabled !== undefined) {
+    return forceEnabled
+  }
 
   if (!isGrowthBookEnabled()) {
     return defaultValue
@@ -743,6 +828,10 @@ export function getFeatureValue_CACHED_MAY_BE_STALE<T>(
   const configOverrides = getConfigOverrides()
   if (configOverrides && feature in configOverrides) {
     return configOverrides[feature] as T
+  }
+  const forceEnabled = getForceEnabledGateValue(feature, defaultValue)
+  if (forceEnabled !== undefined) {
+    return forceEnabled
   }
 
   if (!isGrowthBookEnabled()) {
@@ -813,6 +902,10 @@ export function checkStatsigFeatureGate_CACHED_MAY_BE_STALE(
   if (configOverrides && gate in configOverrides) {
     return Boolean(configOverrides[gate])
   }
+  const forceEnabled = getForceEnabledGateValue(gate, false)
+  if (forceEnabled !== undefined) {
+    return Boolean(forceEnabled)
+  }
 
   if (!isGrowthBookEnabled()) {
     return false
@@ -859,6 +952,10 @@ export async function checkSecurityRestrictionGate(
   const configOverrides = getConfigOverrides()
   if (configOverrides && gate in configOverrides) {
     return Boolean(configOverrides[gate])
+  }
+  const forceEnabled = getForceEnabledGateValue(gate, false)
+  if (forceEnabled !== undefined) {
+    return Boolean(forceEnabled)
   }
 
   if (!isGrowthBookEnabled()) {

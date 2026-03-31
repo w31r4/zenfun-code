@@ -7,6 +7,11 @@ cd "$ROOT_DIR"
 CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/node"
 mkdir -p "$CACHE_DIR"
 
+# Full-feature local default: enable boolean GrowthBook gates unless explicitly
+# turned off by caller (CLAUDE_CODE_ENABLE_ALL_GATES=0).
+: "${CLAUDE_CODE_ENABLE_ALL_GATES:=1}"
+export CLAUDE_CODE_ENABLE_ALL_GATES
+
 # Remove potentially broken localstorage flags inherited from NODE_OPTIONS.
 if [[ -n "${NODE_OPTIONS:-}" ]]; then
   CLEANED_NODE_OPTIONS="$(echo "$NODE_OPTIONS" \
