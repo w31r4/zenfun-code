@@ -2,6 +2,13 @@
 
 这个仓库包含 Claude Code 2.1.88 的可构建工程整理版本。
 
+仓库地址：`https://github.com/w31r4/zenfun-code.git`
+
+```bash
+git clone https://github.com/w31r4/zenfun-code.git
+cd zenfun-code
+```
+
 ## 目录说明
 
 - `cc-v2.1.88-full`：主工程目录（含 `vendor/`），可直接安装依赖、编译、运行。
