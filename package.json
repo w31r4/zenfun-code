@@ -1,0 +1,14 @@
+{
+  "name": "zenfun-code",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "setup": "cd cc-v2.1.88-full && bun install",
+    "build": "cd cc-v2.1.88-full && bun run build",
+    "start": "cd cc-v2.1.88-full && bun run start",
+    "claude": "cd cc-v2.1.88-full && bun run claude",
+    "parity": "cd cc-v2.1.88-full && CC_STRICT_PARITY=1 bun run build.ts",
+    "pack": "cd cc-v2.1.88-full && bun run pack:official-like",
+    "pack:vendor": "cd cc-v2.1.88-full && bun run pack:official-like:vendor"
+  }
+}

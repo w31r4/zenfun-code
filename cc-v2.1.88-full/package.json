@@ -7,8 +7,9 @@
   },
   "scripts": {
     "build": "bun run build.ts",
-    "start": "node dist/cli.js",
-    "claude": "node dist/cli.js",
+    "start": "bash scripts/run-claude-local.sh",
+    "claude": "bash scripts/run-claude-local.sh",
+    "start:raw": "node dist/cli.js",
     "pack:official-like": "bash scripts/pack-official-like.sh --remote-runtime",
     "pack:official-like:vendor": "bash scripts/pack-official-like.sh --vendor-runtime"
   },
