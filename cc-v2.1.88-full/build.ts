@@ -213,6 +213,16 @@ for (const staleFile of ['./dist/cli.js', './dist/cli.js.map']) {
 }
 const EXTERNALS = [
   '@anthropic-ai/tokenizer-*',
+  // Keep MCPB runtime external to preserve its prompt stack exactly as shipped.
+  // Bun can otherwise mis-bundle @inquirer/prompts re-exports.
+  '@anthropic-ai/mcpb',
+  '@anthropic-ai/mcpb/*',
+  '@inquirer/*',
+  // These are intentionally loaded via dynamic import in specific features.
+  '@aws-sdk/credential-providers',
+  'cli-highlight',
+  'cacache',
+  'image-processor-napi',
   '@img/sharp-*',
   'fsevents',
   'tree-sitter',
@@ -351,6 +361,27 @@ if (!result.success) {
 
     // Identify each by context
     const patches: string[] = []
+    let needsPromptHelpers = false
+    const classifyPromptShim = (sym: string): 'input' | 'confirm' | 'select' | null => {
+      const pattern = new RegExp(`${sym}\\(\\{`, 'g')
+      let hasAny = false
+      let hasSelect = false
+      let confirmScore = 0
+      let inputScore = 0
+      let m: RegExpExecArray | null
+      while ((m = pattern.exec(code)) !== null) {
+        hasAny = true
+        const callCtx = code.slice(m.index, m.index + 260)
+        if (callCtx.includes('choices:')) hasSelect = true
+        if (callCtx.includes('default: true') || callCtx.includes('default: false')) confirmScore += 2
+        if (callCtx.includes('validate:')) inputScore += 2
+        if (callCtx.includes('default: "') || callCtx.includes("default: '")) inputScore += 1
+      }
+      if (!hasAny) return null
+      if (hasSelect) return 'select'
+      if (confirmScore > inputScore) return 'confirm'
+      return 'input'
+    }
     for (const sym of missing) {
       // Find first usage context
       const idx = code.indexOf(sym + '(')
@@ -369,6 +400,19 @@ if (!result.success) {
       }
       const ctx = code.slice(Math.max(0, idx - 100), idx + sym.length + 100)
 
+      // Bun can drop @inquirer/prompts bindings in bundled @anthropic-ai/mcpb.
+      // Map missing symbols back to interactive prompt helpers.
+      const promptShim = classifyPromptShim(sym)
+      if (promptShim === 'select') {
+        patches.push(`const ${sym} = __zenfunPromptSelect; // inquirer select shim`)
+        needsPromptHelpers = true
+      } else if (promptShim === 'confirm') {
+        patches.push(`const ${sym} = __zenfunPromptConfirm; // inquirer confirm shim`)
+        needsPromptHelpers = true
+      } else if (promptShim === 'input') {
+        patches.push(`const ${sym} = __zenfunPromptInput; // inquirer input shim`)
+        needsPromptHelpers = true
+      } else
       if (ctx.includes('memoize') || ctx.includes('getGrowthBook') || ctx.includes('checkDependencies') || ctx.includes('getPrompt')) {
         patches.push(`const ${sym} = (fn) => { let r, c = false; return (...a) => { if (!c) { r = fn(...a); c = true; } return r; }; }; // memoize shim`)
       } else if (ctx.includes('getStream') || ctx.includes('Buffer') || ctx.includes('iterable')) {
@@ -379,6 +423,48 @@ if (!result.success) {
         patches.push(`const ${sym} = (...args) => args[0]; // unknown shim`)
         console.log(`  WARNING: Could not identify ${sym}, context: ${ctx.slice(0, 80)}...`)
       }
+    }
+
+    if (needsPromptHelpers) {
+      patches.unshift(
+        `const __zenfunPromptInput = async ({ message = "", default: defaultValue = "", validate } = {}) => {
+  const { createInterface } = await import("node:readline/promises");
+  const { stdin, stdout } = await import("node:process");
+  const rl = createInterface({ input: stdin, output: stdout });
+  try {
+    while (true) {
+      const suffix = defaultValue !== undefined && String(defaultValue).length > 0 ? " (" + defaultValue + ")" : "";
+      const answer = await rl.question(message + suffix + " ");
+      const value = answer === "" && defaultValue !== undefined ? String(defaultValue) : answer;
+      if (!validate) return value;
+      const result = await validate(value);
+      if (result === true || result === undefined) return value;
+      if (typeof result === "string" && result.length > 0) stdout.write(result + "\\n");
+    }
+  } finally {
+    rl.close();
+  }
+};
+const __zenfunPromptConfirm = async ({ message = "", default: defaultValue = false } = {}) => {
+  const hint = defaultValue ? "Y/n" : "y/N";
+  const raw = await __zenfunPromptInput({ message: message + " [" + hint + "]", default: defaultValue ? "y" : "n" });
+  return /^y(es)?$/i.test(String(raw).trim());
+};
+const __zenfunPromptSelect = async ({ message = "", choices = [], default: defaultValue } = {}) => {
+  if (!Array.isArray(choices) || choices.length === 0) return defaultValue;
+  const items = choices.map((choice, index) => {
+    const name = choice && typeof choice === "object" && "name" in choice ? choice.name : String(choice);
+    return String(index + 1) + ") " + String(name);
+  }).join("\\n");
+  const defaultIndex = choices.findIndex(choice => (choice && typeof choice === "object" && "value" in choice ? choice.value : choice) === defaultValue);
+  const defaultPick = defaultIndex >= 0 ? String(defaultIndex + 1) : "1";
+  const raw = await __zenfunPromptInput({ message: message + "\\n" + items + "\\nChoose", default: defaultPick });
+  const picked = Number.parseInt(String(raw), 10);
+  const safeIndex = Number.isFinite(picked) && picked >= 1 && picked <= choices.length ? picked - 1 : defaultIndex >= 0 ? defaultIndex : 0;
+  const selected = choices[safeIndex];
+  return selected && typeof selected === "object" && "value" in selected ? selected.value : selected;
+};`
+      )
     }
 
     // Inject after the first import line
@@ -437,7 +523,9 @@ if (!result.success) {
     ...builtinModules,
     ...builtinModules.map(m => m.startsWith('node:') ? m.slice(5) : `node:${m}`),
   ])
-  const runtimeImports = [...code.matchAll(/^import\s+.*?\s+from\s+"([^"]+)";$/gm)].map(m => m[1])
+  const staticRuntimeImports = [...code.matchAll(/^import\s+.*?\s+from\s+"([^"]+)";$/gm)].map(m => m[1])
+  const dynamicRuntimeImports = [...code.matchAll(/\bimport\(\s*"([^"]+)"\s*\)/g)].map(m => m[1])
+  const runtimeImports = [...new Set([...staticRuntimeImports, ...dynamicRuntimeImports])]
   const runtimeExternalImports = [...new Set(runtimeImports.filter(spec => !builtins.has(spec)))]
   const externalMatchers = EXTERNALS.map(pattern =>
     new RegExp(`^${pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*')}$`)
