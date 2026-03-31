@@ -313,3 +313,4 @@ vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
 doc/
+sandbox-runtime/
