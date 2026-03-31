@@ -6,7 +6,7 @@
  * 2. Build with bun, shimming bun:bundle and stubbing missing modules
  * 3. Generate per-stub exports matching what importers expect
  */
-import { existsSync, readdirSync, readFileSync, statSync } from 'fs'
+import { existsSync, readdirSync, readFileSync, statSync, unlinkSync } from 'fs'
 import { resolve, join } from 'path'
 
 // ── Feature flags ──
@@ -47,7 +47,6 @@ const STUB_PACKAGES = new Set([
   '@ant/computer-use-mcp',
   '@ant/computer-use-swift',
   '@anthropic-ai/mcpb',
-  '@anthropic-ai/sandbox-runtime',
   '@aws-sdk/client-bedrock',
   '@aws-sdk/client-sts',
   '@azure/identity',
@@ -68,7 +67,6 @@ const STUB_PACKAGES = new Set([
   'modifiers-napi',
   'sharp',
   'xmlbuilder',
-  'yaml',
 ])
 
 // ── Pre-scan: collect all named imports per module specifier ──
@@ -161,6 +159,11 @@ function canResolveSrc(specifier: string): boolean {
 
 // ── Build ──
 console.log('Building...')
+for (const staleFile of ['./dist/cli.js', './dist/cli.js.map']) {
+  if (existsSync(staleFile)) {
+    unlinkSync(staleFile)
+  }
+}
 const result = await Bun.build({
   entrypoints: ['./src/entrypoints/cli.tsx'],
   outdir: './dist',
@@ -172,6 +175,12 @@ const result = await Bun.build({
   external: [
     '@anthropic-ai/tokenizer-*',
     '@img/sharp-*',
+    // Keep these external to avoid Bun dropping re-exported runtime symbols
+    // (e.g. GrowthBook, MaxBufferError) in this recovered build.
+    '@growthbook/growthbook',
+    'execa',
+    'lodash-es',
+    'lodash-es/*',
     'fsevents',
     'tree-sitter',
     'tree-sitter-bash',
@@ -195,6 +204,16 @@ const result = await Bun.build({
           }`,
           loader: 'js',
         }))
+
+        // sandbox-runtime package is present in this recovered tree but may be
+        // missing package.json exports, so resolve it directly to dist entry.
+        build.onResolve({ filter: /^@anthropic-ai\/sandbox-runtime$/ }, () => {
+          const runtimeEntry = resolve('./node_modules/@anthropic-ai/sandbox-runtime/dist/index.js')
+          if (existsSync(runtimeEntry)) {
+            return { path: runtimeEntry }
+          }
+          return { path: '@anthropic-ai/sandbox-runtime', namespace: 'stub' }
+        })
 
         // 2. Stub missing npm packages
         build.onResolve({ filter: /.*/ }, (args) => {
@@ -281,6 +300,9 @@ if (!result.success) {
     definedDefaults.add(dm[1])
   }
 
+  const firstNewline = code.indexOf('\n')
+  let modified = false
+  let patchedSymbolCount = 0
   const missing = [...usedDefaults].filter(d => !definedDefaults.has(d))
   if (missing.length > 0) {
     console.log(`  Found ${missing.length} undefined symbols: ${missing.join(', ')}`)
@@ -318,36 +340,51 @@ if (!result.success) {
     }
 
     // Inject after the first import line
-    const firstNewline = code.indexOf('\n')
     code = code.slice(0, firstNewline + 1) + patches.join('\n') + '\n' + code.slice(firstNewline + 1)
-
-    // Also patch the zod `util` namespace reference
-    // The bundler drops `import * as util from './util.js'` for zod/v4
-    if (code.includes('util.normalizeParams') && !code.includes('var util =') && !code.includes('const util =')) {
-      // Read the actual zod v4 util module and inline it as a namespace object
-      const zodUtilSrc = readFileSync('./node_modules/zod/v4/core/util.js', 'utf-8')
-      // Convert ESM exports to object properties
-      const zodUtilShim = `var util = (() => { const exports = {}; ${
-        zodUtilSrc
-          .replace(/export\s+function\s+(\w+)/g, 'exports.$1 = function $1')
-          .replace(/export\s+const\s+(\w+)/g, 'exports.$1')
-          .replace(/export\s+class\s+(\w+)/g, 'exports.$1 = class $1')
-      }; return exports; })();`
-      code = code.slice(0, firstNewline + 1) + zodUtilShim + '\n' + code.slice(firstNewline + 1)
-      console.log('  Injected zod v4 util namespace')
-    }
-
-    // Force process.exit after main completes (event loop cleanup)
-    code = code.replace(
-      /main2\(\);(\s*\/\/#)/,
-      'main2().then(() => process.exit(0)).catch(e => { console.error(e); process.exit(1); });$1'
-    )
-    console.log('  Added process.exit to main2()')
-
-    const { writeFileSync } = await import('fs')
-    writeFileSync(cliPath, code)
-    console.log(`  Patched ${patches.length} symbols`)
+    patchedSymbolCount = patches.length
+    modified = true
   } else {
     console.log('  No missing symbols found')
+  }
+
+  // Also patch the zod `util` namespace reference
+  // The bundler drops `import * as util from './util.js'` for zod/v4
+  if (code.includes('util.normalizeParams') && !code.includes('var util =') && !code.includes('const util =')) {
+    // Read the actual zod v4 util module and inline it as a namespace object
+    const zodUtilSrc = readFileSync('./node_modules/zod/v4/core/util.js', 'utf-8')
+    // Convert ESM exports to object properties
+    const zodUtilShim = `var util = (() => { const exports = {}; ${
+      zodUtilSrc
+        .replace(/export\s+function\s+(\w+)/g, 'exports.$1 = function $1')
+        .replace(/export\s+const\s+(\w+)/g, 'exports.$1')
+        .replace(/export\s+class\s+(\w+)/g, 'exports.$1 = class $1')
+    }; return exports; })();`
+    code = code.slice(0, firstNewline + 1) + zodUtilShim + '\n' + code.slice(firstNewline + 1)
+    modified = true
+    console.log('  Injected zod v4 util namespace')
+  }
+
+  // Force process.exit after main completes (event loop cleanup)
+  const mainWrapped = 'const __forceExitWhenDone = process.argv.includes("-p") || process.argv.includes("--print");'
+  if (!code.includes(mainWrapped)) {
+    const replaced = code.replace(
+      /main2\(\);(\s*\/\/#)/,
+      'const __forceExitWhenDone = process.argv.includes("-p") || process.argv.includes("--print"); main2().then(() => { if (__forceExitWhenDone) process.exit(0); }).catch(e => { console.error(e); process.exit(1); });$1'
+    )
+    if (replaced !== code) {
+      code = replaced
+      modified = true
+    }
+    console.log('  Added process.exit to main2()')
+  }
+
+  if (modified) {
+    const { writeFileSync } = await import('fs')
+    writeFileSync(cliPath, code)
+    if (patchedSymbolCount > 0) {
+      console.log(`  Patched ${patchedSymbolCount} symbols`)
+    } else {
+      console.log('  Applied post-build runtime patches')
+    }
   }
 }
