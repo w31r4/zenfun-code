@@ -1,6 +1,6 @@
-# zenfun-code / Claude Code v2.1.88 Rebuild
+# zenfun code v2.1.88 Rebuild
 
-这个仓库包含 Claude Code 2.1.88 的可构建工程整理版本。
+这个仓库包含 zenfun code 2.1.88 的可构建工程整理版本。
 
 仓库地址：`https://github.com/w31r4/zenfun-code.git`
 
