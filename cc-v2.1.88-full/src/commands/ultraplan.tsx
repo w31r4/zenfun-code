@@ -45,8 +45,13 @@ function getUltraplanModel(): string {
 /* eslint-disable @typescript-eslint/no-require-imports */
 const _rawPrompt = require('../utils/ultraplan/prompt.txt');
 /* eslint-enable @typescript-eslint/no-require-imports */
-const _rawPromptText: unknown = typeof _rawPrompt === 'string' ? _rawPrompt : _rawPrompt?.default;
-const DEFAULT_INSTRUCTIONS: string = (typeof _rawPromptText === 'string' ? _rawPromptText : '').trimEnd();
+const _promptText =
+  typeof _rawPrompt === 'string'
+    ? _rawPrompt
+    : typeof _rawPrompt?.default === 'string'
+      ? _rawPrompt.default
+      : ''
+const DEFAULT_INSTRUCTIONS: string = _promptText.trimEnd();
 
 // Dev-only prompt override resolved eagerly at module load.
 // Gated to ant builds (USER_TYPE is a build-time define,
