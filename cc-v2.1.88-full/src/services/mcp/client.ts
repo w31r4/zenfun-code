@@ -911,7 +911,7 @@ export const connectToServer = memoize(
           '../../utils/claudeInChrome/mcpServer.js'
         )
         const { createClaudeForChromeMcpServer } = await import(
-          '@ant/claude-for-chrome-mcp'
+          '../../vendor/claude-for-chrome-mcp/index.js'
         )
         const { createLinkedTransportPair } = await import(
           './InProcessTransport.js'

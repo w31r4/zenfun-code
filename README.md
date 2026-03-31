@@ -18,6 +18,31 @@
 
 团队统一入口建议：**只使用 `cc-v2.1.88-full`**。
 
+## 当前补齐状态（2026-03-31）
+
+在 `cc-v2.1.88-full` 中，当前构建结果已经达到：
+
+- `stubbedModuleCount = 0`（不再依赖缺失源码的构建 stub）
+- `runtimeExternalImportCount = 4`（仅保留 `zod` 相关 external）
+- `unexpectedRuntimeExternalImportCount = 0`（严格校验通过）
+
+可用以下命令自检：
+
+```bash
+cd cc-v2.1.88-full
+CC_STRICT_PARITY=1 bun run build.ts
+cat dist/parity-report.json
+```
+
+说明：`STRICT_PARITY` 现在检查“是否有 stub 或未声明 external”。声明在 `build.ts` 的 external（当前主要是 `zod`）不算失败。
+
+## 为什么还不是官方发布目录那种“单文件零依赖”
+
+相对 `cc-v2.1.88` 官方发布目录，当前重建版本仍有两点现实差异：
+
+- 官方包是 Anthropic 内部发布链路产物；本仓库使用 Bun 重建链路，行为不完全等价。
+- 在当前 Bun 行为下，`zod` 全量内联会触发运行期符号丢失（如 `_gte3`），因此保留 `zod` external 以确保可运行。
+
 ## 环境要求
 
 - Bun `1.3+`
@@ -44,6 +69,37 @@ mkdir -p ~/.cache/node
 node --localstorage-file="$HOME/.cache/node/localstorage.json" dist/cli.js --debug-file /tmp/cc-run.log
 tail -n 120 /tmp/cc-run.log
 ```
+
+## 生成“官方目录布局”产物（可分发）
+
+```bash
+cd cc-v2.1.88-full
+bun run build.ts
+bun run pack:official-like
+```
+
+默认输出到 `cc-v2.1.88-full/release/cc-v2.1.88`，目录形态与官方包接近（`cli.js`、`package.json`、`README.md`、`LICENSE.md`）。
+
+默认是**远程安装模式**（不打包本地 `node_modules`），产物内带 `install-runtime.sh`：
+
+```bash
+cd cc-v2.1.88-full/release/cc-v2.1.88
+./install-runtime.sh
+node cli.js --version
+```
+
+如果你要打成本地全内置版本（包含已安装的 runtime externals），用：
+
+```bash
+cd cc-v2.1.88-full
+bun run pack:official-like:vendor
+```
+
+## 仍然无法“1:1 复制官方发布包”的部分
+
+- 官方 npm 包由内部发布流水线生成，包含内部构建细节；本仓库是外部重建链路。
+- 当前 Bun 对 `zod` 全量内联仍存在运行期符号丢失问题（如 `_gte3`），所以在构建阶段保留 `zod` external；远程安装模式依赖 `install-runtime.sh` 拉取该依赖，vendor 模式则会内置。
+- 某些边缘集成（如你日志里 `pencil` MCP）依赖本机额外扩展/二进制文件路径，不属于源码缺失问题。
 
 ## 常见问题
 
@@ -76,4 +132,3 @@ bun run build.ts
 ```bash
 cd cc-v2.1.88-full && bun install && bun run build.ts && mkdir -p ~/.cache/node && node --localstorage-file="$HOME/.cache/node/localstorage.json" dist/cli.js
 ```
-

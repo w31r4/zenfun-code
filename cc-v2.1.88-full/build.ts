@@ -6,7 +6,8 @@
  * 2. Build with bun, shimming bun:bundle and stubbing missing modules
  * 3. Generate per-stub exports matching what importers expect
  */
-import { existsSync, readdirSync, readFileSync, statSync, unlinkSync } from 'fs'
+import { existsSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'fs'
+import { builtinModules } from 'module'
 import { resolve, join } from 'path'
 
 // ── Feature flags ──
@@ -40,35 +41,22 @@ const MACROS: Record<string, string> = {
   'MACRO.VERSION_CHANGELOG': '""',
 }
 
+const STRICT_PARITY = process.env.CC_STRICT_PARITY === '1'
+
+const stubbedImports = new Map<string, Set<string>>()
+function recordStub(specifier: string, importer?: string) {
+  if (!stubbedImports.has(specifier)) {
+    stubbedImports.set(specifier, new Set())
+  }
+  if (importer) {
+    stubbedImports.get(specifier)!.add(importer)
+  }
+}
+
 // ── External npm packages to stub ──
-const STUB_PACKAGES = new Set([
-  '@ant/claude-for-chrome-mcp',
-  '@ant/computer-use-input',
-  '@ant/computer-use-mcp',
-  '@ant/computer-use-swift',
-  '@anthropic-ai/mcpb',
-  '@anthropic-ai/sandbox-runtime',
-  '@aws-sdk/client-bedrock',
-  '@aws-sdk/client-sts',
-  '@azure/identity',
-  '@opentelemetry/exporter-logs-otlp-grpc',
-  '@opentelemetry/exporter-logs-otlp-http',
-  '@opentelemetry/exporter-logs-otlp-proto',
-  '@opentelemetry/exporter-metrics-otlp-grpc',
-  '@opentelemetry/exporter-metrics-otlp-http',
-  '@opentelemetry/exporter-metrics-otlp-proto',
-  '@opentelemetry/exporter-prometheus',
-  '@opentelemetry/exporter-trace-otlp-grpc',
-  '@opentelemetry/exporter-trace-otlp-http',
-  '@opentelemetry/exporter-trace-otlp-proto',
-  '@xmldom/xmldom',
-  'bidi-js',
-  'color-diff-napi',
-  'fflate',
-  'modifiers-napi',
-  'sharp',
-  'xmlbuilder',
-])
+// Keep this empty by default. If a private/internal package is unavailable in
+// a local environment, add it here temporarily with a runtime fallback.
+const STUB_PACKAGES = new Set<string>()
 
 // ── Pre-scan: collect all named imports per module specifier ──
 console.log('Pre-scanning imports...')
@@ -199,6 +187,23 @@ function canResolveSrc(specifier: string): boolean {
   return candidates.some(c => existsSync(resolve('./src', c)))
 }
 
+function resolveImportFile(importer: string | undefined, specifier: string): string | undefined {
+  if (specifier.startsWith('/')) {
+    return existsSync(specifier) ? specifier : undefined
+  }
+  if (specifier.startsWith('src/')) {
+    const abs = resolve('./src', specifier.replace(/^src\//, ''))
+    return existsSync(abs) ? abs : undefined
+  }
+  if (specifier.startsWith('./') || specifier.startsWith('../')) {
+    if (!importer) return undefined
+    const dir = importer.replace(/\/[^/]+$/, '')
+    const abs = resolve(dir, specifier)
+    return existsSync(abs) ? abs : undefined
+  }
+  return undefined
+}
+
 // ── Build ──
 console.log('Building...')
 for (const staleFile of ['./dist/cli.js', './dist/cli.js.map']) {
@@ -206,6 +211,19 @@ for (const staleFile of ['./dist/cli.js', './dist/cli.js.map']) {
     unlinkSync(staleFile)
   }
 }
+const EXTERNALS = [
+  '@anthropic-ai/tokenizer-*',
+  '@img/sharp-*',
+  'fsevents',
+  'tree-sitter',
+  'tree-sitter-bash',
+  '*.node',
+  // Bun currently mis-bundles parts of zod v4 internals (e.g. _gte3),
+  // so keep zod external for runtime correctness.
+  'zod',
+  'zod/*',
+]
+
 const result = await Bun.build({
   entrypoints: ['./src/entrypoints/cli.tsx'],
   outdir: './dist',
@@ -214,23 +232,7 @@ const result = await Bun.build({
   sourcemap: 'external',
   minify: false,
   define: MACROS,
-  external: [
-    '@anthropic-ai/tokenizer-*',
-    '@img/sharp-*',
-    // Keep these external to avoid Bun dropping re-exported runtime symbols
-    // (e.g. GrowthBook, MaxBufferError) in this recovered build.
-    '@growthbook/growthbook',
-    'execa',
-    'lodash-es',
-    'lodash-es/*',
-    'fsevents',
-    'tree-sitter',
-    'tree-sitter-bash',
-    '*.node',
-    // zod v4's complex re-export chain breaks bun's bundler
-    'zod',
-    'zod/*',
-  ],
+  external: EXTERNALS,
   plugins: [
     {
       name: 'cc-build',
@@ -255,6 +257,7 @@ const result = await Bun.build({
             ? args.path.split('/').slice(0, 2).join('/')
             : args.path.split('/')[0]
           if (STUB_PACKAGES.has(pkg)) {
+            recordStub(args.path, args.importer)
             return { path: args.path, namespace: 'stub' }
           }
           return undefined
@@ -263,12 +266,18 @@ const result = await Bun.build({
         // 3. Stub src/ absolute imports
         build.onResolve({ filter: /^src\// }, (args) => {
           if (canResolveSrc(args.path)) return undefined
+          recordStub(args.path, args.importer)
           return { path: args.path, namespace: 'stub' }
         })
 
-        // 3c. Stub .md imports (before relative import check)
-        build.onResolve({ filter: /\.md['"]?$/ }, (args) => {
+        // 3c. Resolve .md imports as inlined text; only stub if file is missing
+        build.onResolve({ filter: /\.md$/ }, (args) => {
           if (args.importer?.includes('node_modules')) return undefined
+          const resolved = resolveImportFile(args.importer, args.path)
+          if (resolved) {
+            return { path: resolved, namespace: 'md-text' }
+          }
+          recordStub(args.path, args.importer)
           return { path: args.path, namespace: 'stub-md' }
         })
 
@@ -276,13 +285,14 @@ const result = await Bun.build({
         build.onResolve({ filter: /^\./ }, (args) => {
           if (!args.importer || args.importer.includes('node_modules')) return undefined
           if (canResolveRelative(args.importer, args.path)) return undefined
+          recordStub(args.path, args.importer)
           return { path: args.path, namespace: 'stub' }
         })
 
-        // 5. Stub .md imports
-        build.onResolve({ filter: /\.md$/ }, () => ({
-          path: 'stub.md',
-          namespace: 'stub-md',
+        // 5. Markdown loader / fallback stub
+        build.onLoad({ filter: /.*/, namespace: 'md-text' }, (args) => ({
+          contents: `export default ${JSON.stringify(readFileSync(args.path, 'utf-8'))};`,
+          loader: 'js',
         }))
         build.onLoad({ filter: /.*/, namespace: 'stub-md' }, () => ({
           contents: 'export default "";',
@@ -379,21 +389,24 @@ if (!result.success) {
     console.log('  No missing symbols found')
   }
 
-  // Also patch the zod `util` namespace reference
-  // The bundler drops `import * as util from './util.js'` for zod/v4
-  if (code.includes('util.normalizeParams') && !code.includes('var util =') && !code.includes('const util =')) {
+  // Also patch missing zod `util` namespace bindings.
+  // Bun may emit `util.normalizeParams(...)` or `utilN.normalizeParams(...)`
+  // without preserving the corresponding namespace import.
+  const utilMatch = code.match(/\b(util\d*)\.normalizeParams\b/)
+  if (utilMatch && !new RegExp(`(?:var|const|let)\\s+${utilMatch[1]}\\s*=`).test(code)) {
+    const utilBinding = utilMatch[1]
     // Read the actual zod v4 util module and inline it as a namespace object
     const zodUtilSrc = readFileSync('./node_modules/zod/v4/core/util.js', 'utf-8')
-    // Convert ESM exports to object properties
-    const zodUtilShim = `var util = (() => { const exports = {}; ${
-      zodUtilSrc
-        .replace(/export\s+function\s+(\w+)/g, 'exports.$1 = function $1')
-        .replace(/export\s+const\s+(\w+)/g, 'exports.$1')
-        .replace(/export\s+class\s+(\w+)/g, 'exports.$1 = class $1')
-    }; return exports; })();`
+    const exportedNames = [...zodUtilSrc.matchAll(/export\s+(?:function|const|class)\s+([A-Za-z_$][\w$]*)/g)]
+      .map(m => m[1])
+    const zodUtilBody = zodUtilSrc
+      .replace(/export\s+function\s+/g, 'function ')
+      .replace(/export\s+const\s+/g, 'const ')
+      .replace(/export\s+class\s+/g, 'class ')
+    const zodUtilShim = `var ${utilBinding} = (() => {\n${zodUtilBody}\nreturn { ${exportedNames.join(', ')} };\n})();`
     code = code.slice(0, firstNewline + 1) + zodUtilShim + '\n' + code.slice(firstNewline + 1)
     modified = true
-    console.log('  Injected zod v4 util namespace')
+    console.log(`  Injected zod v4 util namespace as ${utilBinding}`)
   }
 
   // Force process.exit after main completes (event loop cleanup)
@@ -411,12 +424,68 @@ if (!result.success) {
   }
 
   if (modified) {
-    const { writeFileSync } = await import('fs')
     writeFileSync(cliPath, code)
     if (patchedSymbolCount > 0) {
       console.log(`  Patched ${patchedSymbolCount} symbols`)
     } else {
       console.log('  Applied post-build runtime patches')
     }
+  }
+
+  // ── Build parity report ──
+  const builtins = new Set([
+    ...builtinModules,
+    ...builtinModules.map(m => m.startsWith('node:') ? m.slice(5) : `node:${m}`),
+  ])
+  const runtimeImports = [...code.matchAll(/^import\s+.*?\s+from\s+"([^"]+)";$/gm)].map(m => m[1])
+  const runtimeExternalImports = [...new Set(runtimeImports.filter(spec => !builtins.has(spec)))]
+  const externalMatchers = EXTERNALS.map(pattern =>
+    new RegExp(`^${pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*')}$`)
+  )
+  const expectedRuntimeExternalImports = runtimeExternalImports.filter(spec =>
+    externalMatchers.some(re => re.test(spec))
+  )
+  const unexpectedRuntimeExternalImports = runtimeExternalImports.filter(spec =>
+    !externalMatchers.some(re => re.test(spec))
+  )
+  const stubEntries = [...stubbedImports.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([specifier, importers]) => ({
+      specifier,
+      importers: [...importers].sort(),
+    }))
+
+  const parityReport = {
+    strictParity: STRICT_PARITY,
+    timestamp: new Date().toISOString(),
+    stubbedModuleCount: stubEntries.length,
+    runtimeExternalImportCount: runtimeExternalImports.length,
+    expectedRuntimeExternalImportCount: expectedRuntimeExternalImports.length,
+    unexpectedRuntimeExternalImportCount: unexpectedRuntimeExternalImports.length,
+    configuredExternals: EXTERNALS,
+    stubbedModules: stubEntries,
+    runtimeExternalImports,
+    expectedRuntimeExternalImports,
+    unexpectedRuntimeExternalImports,
+  }
+
+  writeFileSync('./dist/parity-report.json', JSON.stringify(parityReport, null, 2))
+  console.log(`  Wrote parity report: ./dist/parity-report.json`)
+  if (stubEntries.length > 0) {
+    console.log(`  Stubbed modules: ${stubEntries.length}`)
+  }
+  if (runtimeExternalImports.length > 0) {
+    console.log(`  Runtime external imports: ${runtimeExternalImports.length} (${unexpectedRuntimeExternalImports.length} unexpected)`)
+  }
+
+  if (STRICT_PARITY && (stubEntries.length > 0 || unexpectedRuntimeExternalImports.length > 0)) {
+    console.error('\nSTRICT_PARITY failed:')
+    if (stubEntries.length > 0) {
+      console.error(`- stubbed modules: ${stubEntries.length}`)
+    }
+    if (unexpectedRuntimeExternalImports.length > 0) {
+      console.error(`- unexpected runtime external imports: ${unexpectedRuntimeExternalImports.length}`)
+    }
+    process.exit(2)
   }
 }
