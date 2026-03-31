@@ -42,6 +42,9 @@ if [[ "$MODE" == "vendor" ]]; then
   mkdir -p "$OUT_DIR/node_modules"
   rm -rf "$OUT_DIR/node_modules/zod"
   cp -R "$ROOT_DIR/node_modules/zod" "$OUT_DIR/node_modules/zod"
+  rm -rf "$OUT_DIR/node_modules/@anthropic-ai/sandbox-runtime"
+  mkdir -p "$OUT_DIR/node_modules/@anthropic-ai"
+  cp -R "$ROOT_DIR/node_modules/@anthropic-ai/sandbox-runtime" "$OUT_DIR/node_modules/@anthropic-ai/sandbox-runtime"
 
   copy_if_exists() {
     local src="$1"
@@ -106,7 +109,8 @@ cat > "$OUT_DIR/package.json" <<'JSON'
   "license": "SEE LICENSE IN README.md",
   "description": "Rebuilt Claude Code package from local recovered source.",
   "dependencies": {
-    "zod": "^4.3.6"
+    "zod": "^4.3.6",
+    "@anthropic-ai/sandbox-runtime": "^0.0.44"
   },
   "optionalDependencies": {
     "@img/sharp-darwin-arm64": "^0.34.5",

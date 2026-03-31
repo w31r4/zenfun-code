@@ -93,6 +93,8 @@ cd cc-v2.1.88-full/release/cc-v2.1.88
 node cli.js --version
 ```
 
+`install-runtime.sh` 会安装运行必需依赖（包含 `zod` 与 `@anthropic-ai/sandbox-runtime`）。
+
 如果你要打成本地全内置版本（包含已安装的 runtime externals），用：
 
 ```bash
@@ -104,6 +106,7 @@ bun run pack:official-like:vendor
 
 - 官方 npm 包由内部发布流水线生成，包含内部构建细节；本仓库是外部重建链路。
 - 当前 Bun 对 `zod` 全量内联仍存在运行期符号丢失问题（如 `_gte3`），所以在构建阶段保留 `zod` external；远程安装模式依赖 `install-runtime.sh` 拉取该依赖，vendor 模式则会内置。
+- `sandbox-runtime` 代码与依赖可随项目一起分发，但其底层隔离能力仍依赖目标机器平台与系统组件（例如 Linux 下的相关隔离工具）。
 - 某些边缘集成（如你日志里 `pencil` MCP）依赖本机额外扩展/二进制文件路径，不属于源码缺失问题。
 
 ## 常见问题
