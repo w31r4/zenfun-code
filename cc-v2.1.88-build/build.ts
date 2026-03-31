@@ -47,6 +47,7 @@ const STUB_PACKAGES = new Set([
   '@ant/computer-use-mcp',
   '@ant/computer-use-swift',
   '@anthropic-ai/mcpb',
+  '@anthropic-ai/sandbox-runtime',
   '@aws-sdk/client-bedrock',
   '@aws-sdk/client-sts',
   '@azure/identity',
@@ -107,6 +108,47 @@ scanDir('./src')
 console.log(`  Found ${allImports.size} unique module specifiers`)
 
 function generateStub(modulePath: string): string {
+  if (modulePath === '@anthropic-ai/sandbox-runtime') {
+    return `
+      const noop = Object.assign(() => {}, { __esModule: true });
+      noop.prototype = {};
+      const emptyStore = {
+        subscribe: () => () => {},
+        getTotalCount: () => 0,
+      };
+      export const SandboxRuntimeConfigSchema = { parse: (v) => v };
+      export class SandboxViolationStore {
+        subscribe() { return () => {}; }
+        getTotalCount() { return 0; }
+      }
+      export const SandboxManager = {
+        initialize: async () => {},
+        updateConfig: () => {},
+        reset: async () => {},
+        wrapWithSandbox: async (command) => command,
+        checkDependencies: () => ({ errors: ['sandbox-runtime unavailable'], warnings: [] }),
+        isSupportedPlatform: () => false,
+        getFsReadConfig: () => ({ allowOnly: [], denyWithinAllow: [] }),
+        getFsWriteConfig: () => ({ allowOnly: [], denyWithinAllow: [] }),
+        getNetworkRestrictionConfig: () => ({ allowedDomains: [], deniedDomains: [] }),
+        getIgnoreViolations: () => ({}),
+        getAllowUnixSockets: () => false,
+        getAllowLocalBinding: () => false,
+        getEnableWeakerNestedSandbox: () => false,
+        getProxyPort: () => undefined,
+        getSocksProxyPort: () => undefined,
+        getLinuxHttpSocketPath: () => undefined,
+        getLinuxSocksSocketPath: () => undefined,
+        waitForNetworkInitialization: async () => {},
+        getSandboxViolationStore: () => emptyStore,
+        annotateStderrWithSandboxFailures: (_command, stderr) => stderr ?? '',
+        cleanupAfterCommand: () => {},
+      };
+      export default { SandboxManager, SandboxRuntimeConfigSchema, SandboxViolationStore };
+      export const __esModule = true;
+    `
+  }
+
   const names = allImports.get(modulePath) ?? new Set()
   // Also check without .js → .ts mapping
   const alt = modulePath.replace(/\.js$/, '')
@@ -204,16 +246,6 @@ const result = await Bun.build({
           }`,
           loader: 'js',
         }))
-
-        // sandbox-runtime package is present in this recovered tree but may be
-        // missing package.json exports, so resolve it directly to dist entry.
-        build.onResolve({ filter: /^@anthropic-ai\/sandbox-runtime$/ }, () => {
-          const runtimeEntry = resolve('./node_modules/@anthropic-ai/sandbox-runtime/dist/index.js')
-          if (existsSync(runtimeEntry)) {
-            return { path: runtimeEntry }
-          }
-          return { path: '@anthropic-ai/sandbox-runtime', namespace: 'stub' }
-        })
 
         // 2. Stub missing npm packages
         build.onResolve({ filter: /.*/ }, (args) => {
