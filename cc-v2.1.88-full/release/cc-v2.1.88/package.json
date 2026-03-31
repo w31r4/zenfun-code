@@ -12,7 +12,8 @@
   "license": "SEE LICENSE IN README.md",
   "description": "Rebuilt Claude Code package from local recovered source.",
   "dependencies": {
-    "zod": "^4.3.6"
+    "zod": "^4.3.6",
+    "@anthropic-ai/sandbox-runtime": "^0.0.44"
   },
   "optionalDependencies": {
     "@img/sharp-darwin-arm64": "^0.34.5",
