@@ -1,6 +1,16 @@
 import { execa } from 'execa'
 import { execSync_DEPRECATED } from './execSyncWrapper.js'
 
+function normalizeWhichOutput(value: unknown): string {
+  if (typeof value === 'string') return value
+  if (value == null) return ''
+  if (Array.isArray(value)) return value.join('\n')
+  if (value instanceof Uint8Array) {
+    return Buffer.from(value).toString('utf8')
+  }
+  return String(value)
+}
+
 async function whichNodeAsync(command: string): Promise<string | null> {
   if (process.platform === 'win32') {
     // On Windows, use where.exe and return the first result
@@ -9,11 +19,12 @@ async function whichNodeAsync(command: string): Promise<string | null> {
       stderr: 'ignore',
       reject: false,
     })
-    if (result.exitCode !== 0 || !result.stdout) {
+    const stdout = normalizeWhichOutput(result.stdout)
+    if (result.exitCode !== 0 || !stdout) {
       return null
     }
     // where.exe returns multiple paths separated by newlines, return the first
-    return result.stdout.trim().split(/\r?\n/)[0] || null
+    return stdout.trim().split(/\r?\n/)[0] || null
   }
 
   // On POSIX systems (macOS, Linux, WSL), use which
@@ -24,10 +35,11 @@ async function whichNodeAsync(command: string): Promise<string | null> {
     stderr: 'ignore',
     reject: false,
   })
-  if (result.exitCode !== 0 || !result.stdout) {
+  const stdout = normalizeWhichOutput(result.stdout)
+  if (result.exitCode !== 0 || !stdout) {
     return null
   }
-  return result.stdout.trim()
+  return stdout.trim()
 }
 
 function whichNodeSync(command: string): string | null {

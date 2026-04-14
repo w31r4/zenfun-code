@@ -17,6 +17,7 @@ const EXCLUDED_FEATURES = new Set([
   'ABLATION_BASELINE', // experiment control arm, not a user-facing capability
   'ALLOW_TEST_VERSIONS', // updater/dev test path
   'ANTI_DISTILLATION_CC', // upstream rejects anti_distillation payloads in this local/public path
+  'BG_SESSIONS', // task summary runtime module is missing from this source drop
   'BUDDY', // companion observer path is incomplete in this source drop
   'EXPERIMENTAL_SKILL_SEARCH', // skillSearch runtime modules are missing from this source drop
   'HARD_FAIL', // deliberate fault-injection behavior
