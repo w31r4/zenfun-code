@@ -1660,6 +1660,7 @@ async function* queryModel(
     // by isAgenticQuery per-call so classifiers/compaction don't get it.
     if (feature('TRANSCRIPT_CLASSIFIER')) {
       if (
+        AFK_MODE_BETA_HEADER &&
         afkHeaderLatched &&
         shouldIncludeFirstPartyOnlyBetas() &&
         isAgenticQuery &&
@@ -1694,7 +1695,10 @@ async function* queryModel(
       ? (options.temperatureOverride ?? 1)
       : undefined
 
-    lastRequestBetas = betasParams
+    const filteredBetas = betasParams.filter(
+      (beta): beta is string => typeof beta === 'string' && beta.length > 0,
+    )
+    lastRequestBetas = filteredBetas
 
     return {
       model: normalizeModelStringForAPI(options.model),
@@ -1710,7 +1714,7 @@ async function* queryModel(
       system,
       tools: allTools,
       tool_choice: options.toolChoice,
-      ...(useBetas && { betas: betasParams }),
+      ...(useBetas && { betas: filteredBetas }),
       metadata: getAPIMetadata(),
       max_tokens: maxOutputTokens,
       thinking,

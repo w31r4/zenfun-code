@@ -217,8 +217,9 @@ function getForceEnableAllGateExcludeSet(): Set<string> {
 
 function isForceEnableAllGatesEnabled(): boolean {
   const raw = process.env.CLAUDE_CODE_ENABLE_ALL_GATES
-  // Zenfun full-feature default: on unless explicitly disabled.
-  return raw === undefined ? true : isEnvTruthy(raw)
+  // Keep runtime gate behavior aligned with public builds unless the caller
+  // explicitly opts into the "enable all" override.
+  return raw === undefined ? false : isEnvTruthy(raw)
 }
 
 function getForceEnabledGateValue<T>(feature: string, defaultValue: T): T | undefined {

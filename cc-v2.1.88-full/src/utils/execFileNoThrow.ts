@@ -60,6 +60,16 @@ type ExecaResultWithError = {
   signal?: string
 }
 
+function normalizeExecOutput(value: unknown): string {
+  if (typeof value === 'string') return value
+  if (value == null) return ''
+  if (Array.isArray(value)) return value.join('\n')
+  if (value instanceof Uint8Array) {
+    return Buffer.from(value).toString('utf8')
+  }
+  return String(value)
+}
+
 /**
  * Extracts a human-readable error message from an execa result.
  *
@@ -123,8 +133,8 @@ export function execFileNoThrowWithCwd(
           if (finalPreserveOutput) {
             const errorCode = result.exitCode ?? 1
             void resolve({
-              stdout: result.stdout || '',
-              stderr: result.stderr || '',
+              stdout: normalizeExecOutput(result.stdout),
+              stderr: normalizeExecOutput(result.stderr),
               code: errorCode,
               error: getErrorMessage(
                 result as unknown as ExecaResultWithError,
@@ -136,8 +146,8 @@ export function execFileNoThrowWithCwd(
           }
         } else {
           void resolve({
-            stdout: result.stdout,
-            stderr: result.stderr,
+            stdout: normalizeExecOutput(result.stdout),
+            stderr: normalizeExecOutput(result.stderr),
             code: 0,
           })
         }

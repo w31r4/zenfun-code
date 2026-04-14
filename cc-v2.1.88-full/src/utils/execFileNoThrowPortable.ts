@@ -12,6 +12,16 @@ type ExecSyncOptions = {
   stdio?: ExecaOptions['stdio']
 }
 
+function normalizeExecOutput(value: unknown): string {
+  if (typeof value === 'string') return value
+  if (value == null) return ''
+  if (Array.isArray(value)) return value.join('\n')
+  if (value instanceof Uint8Array) {
+    return Buffer.from(value).toString('utf8')
+  }
+  return String(value)
+}
+
 /**
  * @deprecated Use `execa` directly with `{ shell: true, reject: false }` for non-blocking execution.
  * Sync exec calls block the event loop and cause performance issues.
@@ -79,10 +89,11 @@ export function execSyncWithDefaults_DEPRECATED(
       reject: false, // Don't throw on non-zero exit codes
       input,
     })
-    if (!result.stdout) {
+    const stdout = normalizeExecOutput(result.stdout)
+    if (!stdout) {
       return null
     }
-    return result.stdout.trim() || null
+    return stdout.trim() || null
   } catch {
     return null
   }

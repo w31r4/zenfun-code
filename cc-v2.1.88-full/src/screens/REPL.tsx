@@ -2764,12 +2764,24 @@ export function REPL({
         effortValue: effort
       });
     }
+    const traceQuerySetup = async <T,>(label: string, promise: Promise<T>): Promise<T> => {
+      try {
+        const value = await promise;
+        logForDebugging(`[query] ${label} ready`);
+        return value;
+      } catch (error) {
+        logForDebugging(`[query] ${label} failed: ${errorMessage(error)}`, {
+          level: 'error'
+        });
+        throw error;
+      }
+    };
     queryCheckpoint('query_context_loading_start');
     const [,, defaultSystemPrompt, baseUserContext, systemContext] = await Promise.all([
     // IMPORTANT: do this after setMessages() above, to avoid UI jank
-    checkAndDisableBypassPermissionsIfNeeded(toolPermissionContext, setAppState),
+    traceQuerySetup('bypass-permissions gate', checkAndDisableBypassPermissionsIfNeeded(toolPermissionContext, setAppState)),
     // Gated on TRANSCRIPT_CLASSIFIER so GrowthBook kill switch runs wherever auto mode is built in
-    feature('TRANSCRIPT_CLASSIFIER') ? checkAndDisableAutoModeIfNeeded(toolPermissionContext, setAppState, store.getState().fastMode) : undefined, getSystemPrompt(freshTools, mainLoopModelParam, Array.from(toolPermissionContext.additionalWorkingDirectories.keys()), freshMcpClients), getUserContext(), getSystemContext()]);
+    feature('TRANSCRIPT_CLASSIFIER') ? traceQuerySetup('auto-mode gate', checkAndDisableAutoModeIfNeeded(toolPermissionContext, setAppState, store.getState().fastMode)) : Promise.resolve(undefined), traceQuerySetup('system prompt', getSystemPrompt(freshTools, mainLoopModelParam, Array.from(toolPermissionContext.additionalWorkingDirectories.keys()), freshMcpClients)), traceQuerySetup('user context', getUserContext()), traceQuerySetup('system context', getSystemContext())]);
     const userContext = {
       ...baseUserContext,
       ...getCoordinatorUserContext(freshMcpClients, isScratchpadEnabled() ? getScratchpadDir() : undefined),
@@ -2915,7 +2927,15 @@ export function REPL({
           return;
         }
       }
-      await onQueryImpl(latestMessages, newMessages, abortController, shouldQuery, additionalAllowedTools, mainLoopModelParam, effort);
+      try {
+        await onQueryImpl(latestMessages, newMessages, abortController, shouldQuery, additionalAllowedTools, mainLoopModelParam, effort);
+      } catch (error) {
+        logError(error instanceof Error ? error : new Error(String(error)));
+        logForDebugging(`[query] onQuery failed: ${errorMessage(error)}`, {
+          level: 'error'
+        });
+        setMessages(prev => [...prev, createSystemMessage(`Execution error: ${errorMessage(error)}`, 'error', undefined, true)]);
+      }
     } finally {
       // queryGuard.end() atomically checks generation and transitions
       // running→idle. Returns false if a newer query owns the guard

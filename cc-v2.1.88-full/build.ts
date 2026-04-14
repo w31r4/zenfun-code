@@ -16,6 +16,9 @@ import { extname, resolve, join } from 'path'
 const EXCLUDED_FEATURES = new Set([
   'ABLATION_BASELINE', // experiment control arm, not a user-facing capability
   'ALLOW_TEST_VERSIONS', // updater/dev test path
+  'ANTI_DISTILLATION_CC', // upstream rejects anti_distillation payloads in this local/public path
+  'BUDDY', // companion observer path is incomplete in this source drop
+  'EXPERIMENTAL_SKILL_SEARCH', // skillSearch runtime modules are missing from this source drop
   'HARD_FAIL', // deliberate fault-injection behavior
   'HISTORY_SNIP', // snip projection runtime is missing from this source drop
   'OVERFLOW_TEST_TOOL', // internal test tool
@@ -24,6 +27,7 @@ const EXCLUDED_FEATURES = new Set([
   'KAIROS', // assistant entrypoints are incomplete in this source drop
   'KAIROS_DREAM', // bundled dream skill is missing from this source drop
   'PROACTIVE', // proactive runtime modules are missing from this source drop
+  'REACTIVE_COMPACT', // reactive compact runtime module is missing from this source drop
   'REVIEW_ARTIFACT', // bundled hunter skill is missing from this source drop
   'RUN_SKILL_GENERATOR', // bundled runSkillGenerator skill is missing
   'UDS_INBOX', // UDS inbox runtime is incomplete in this source drop
@@ -281,6 +285,11 @@ for (const staleFile of ['./dist/cli.js', './dist/cli.js.map']) {
 }
 const EXTERNALS = [
   '@anthropic-ai/tokenizer-*',
+  // Bun currently drops the GrowthBook class binding in the bundled output,
+  // leaving `new GrowthBook(...)` as an unbound identifier at runtime.
+  // Keep it external so Node resolves the real package from node_modules.
+  '@growthbook/growthbook',
+  '@growthbook/growthbook/*',
   // Keep MCPB runtime external to preserve its prompt stack exactly as shipped.
   // Bun can otherwise mis-bundle @inquirer/prompts re-exports.
   '@anthropic-ai/mcpb',
@@ -434,6 +443,24 @@ if (!result.success) {
   const firstNewline = code.indexOf('\n')
   let modified = false
   let patchedSymbolCount = 0
+
+  if (
+    code.includes('MaxBufferError') &&
+    !/\b(class|var|const|let)\s+MaxBufferError\b/.test(code)
+  ) {
+    const maxBufferShim = `class MaxBufferError extends Error {
+  constructor(message = "Max buffer exceeded") {
+    super(message);
+    this.name = "MaxBufferError";
+  }
+}
+`
+    code = code.slice(0, firstNewline + 1) + maxBufferShim + code.slice(firstNewline + 1)
+    modified = true
+    patchedSymbolCount += 1
+    console.log('  Injected MaxBufferError shim')
+  }
+
   const missing = [...usedDefaults].filter(d => !definedDefaults.has(d))
   if (missing.length > 0) {
     console.log(`  Found ${missing.length} undefined symbols: ${missing.join(', ')}`)
