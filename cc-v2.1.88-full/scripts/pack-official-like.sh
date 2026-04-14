@@ -34,6 +34,7 @@ cp "$ROOT_DIR/dist/cli.js" "$OUT_DIR/cli.js"
 if [[ -f "$ROOT_DIR/dist/cli.js.map" ]]; then
   cp "$ROOT_DIR/dist/cli.js.map" "$OUT_DIR/cli.js.map"
 fi
+mkdir -p "$OUT_DIR/bin"
 
 # Bundle runtime externals so artifact can run without install.
 if [[ "$MODE" == "vendor" ]]; then
@@ -57,7 +58,7 @@ cat > "$OUT_DIR/package.json" <<'JSON'
   "name": "@anthropic-ai/claude-code",
   "version": "2.1.88-dev-rebuild",
   "bin": {
-    "claude": "cli.js"
+    "claude": "bin/claude"
   },
   "engines": {
     "node": ">=18.0.0"
@@ -88,6 +89,45 @@ cat > "$OUT_DIR/package.json" <<'JSON'
   }
 }
 JSON
+
+cat > "$OUT_DIR/bin/claude" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_PATH="${BASH_SOURCE[0]}"
+while [[ -L "$SCRIPT_PATH" ]]; do
+  LINK_TARGET="$(readlink "$SCRIPT_PATH")"
+  if [[ "$LINK_TARGET" == /* ]]; then
+    SCRIPT_PATH="$LINK_TARGET"
+  else
+    SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
+    SCRIPT_PATH="$SCRIPT_DIR/$LINK_TARGET"
+  fi
+done
+
+ROOT_DIR="$(cd "$(dirname "$SCRIPT_PATH")/.." && pwd)"
+CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/node"
+mkdir -p "$CACHE_DIR"
+
+# Full-feature local default: enable boolean GrowthBook gates unless explicitly
+# turned off by caller (CLAUDE_CODE_ENABLE_ALL_GATES=0).
+: "${CLAUDE_CODE_ENABLE_ALL_GATES:=1}"
+export CLAUDE_CODE_ENABLE_ALL_GATES
+
+# Remove potentially broken localstorage flags inherited from NODE_OPTIONS.
+if [[ -n "${NODE_OPTIONS:-}" ]]; then
+  CLEANED_NODE_OPTIONS="$(echo "$NODE_OPTIONS" \
+    | sed -E 's/(^|[[:space:]])--localstorage-file(=[^[:space:]]+)?//g; s/[[:space:]]+/ /g; s/^ //; s/ $//')"
+  if [[ -n "$CLEANED_NODE_OPTIONS" ]]; then
+    export NODE_OPTIONS="$CLEANED_NODE_OPTIONS"
+  else
+    unset NODE_OPTIONS
+  fi
+fi
+
+exec node --localstorage-file="$CACHE_DIR/localstorage.json" "$ROOT_DIR/cli.js" "$@"
+SH
+chmod +x "$OUT_DIR/bin/claude"
 
 cat > "$OUT_DIR/install-runtime.sh" <<'SH'
 #!/usr/bin/env bash
