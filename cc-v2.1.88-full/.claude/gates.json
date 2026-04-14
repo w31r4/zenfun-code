@@ -1,0 +1,29 @@
+{
+  "tengu_kairos_brief_config": {
+    "enable_slash_command": true
+  },
+  "tengu_onyx_plover": {
+    "enabled": true,
+    "minHours": 6,
+    "minSessions": 2
+  },
+  "tengu_auto_mode_config": {
+    "enabled": "enabled",
+    "disableFastMode": false,
+    "allowModels": [
+      "sonnet",
+      "opus",
+      "claude-sonnet-4-5",
+      "claude-sonnet-4-6",
+      "claude-opus-4-1",
+      "claude-opus-4-5",
+      "claude-opus-4-6"
+    ]
+  },
+  "tengu_willow_mode": "hint_v2",
+  "tengu_desktop_upsell": {
+    "enable_shortcut_tip": false,
+    "enable_startup_dialog": false
+  },
+  "tengu_cicada_nap_ms": 0
+}

@@ -1673,6 +1673,10 @@ export function setAdditionalDirectoriesForClaudeMd(
   STATE.additionalDirectoriesForClaudeMd = directories
 }
 
+export function isReplBridgeActive(): boolean {
+  return false
+}
+
 export function getAllowedChannels(): ChannelEntry[] {
   return STATE.allowedChannels
 }
@@ -1755,4 +1759,3 @@ export function getPromptId(): string | null {
 export function setPromptId(id: string | null): void {
   STATE.promptId = id
 }
-

@@ -12,7 +12,7 @@ import type {
   PermissionUpdateDestination,
 } from '../../types/permissions.js'
 import { lazySchema } from '../lazySchema.js'
-import { externalPermissionModeSchema } from './PermissionMode.js'
+import { permissionModeSchema } from './PermissionMode.js'
 import {
   permissionBehaviorSchema,
   permissionRuleValueSchema,
@@ -61,7 +61,7 @@ export const permissionUpdateSchema = lazySchema(() =>
     }),
     z.object({
       type: z.literal('setMode'),
-      mode: externalPermissionModeSchema(),
+      mode: permissionModeSchema(),
       destination: permissionUpdateDestinationSchema(),
     }),
     z.object({

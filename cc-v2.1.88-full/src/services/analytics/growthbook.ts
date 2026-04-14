@@ -289,15 +289,62 @@ export function hasGrowthBookEnvOverride(feature: string): boolean {
  * runtime, and getGlobalConfig() is already memory-cached (pointer-chase)
  * until the next saveGlobalConfig() invalidates it.
  */
-function getConfigOverrides(): Record<string, unknown> | undefined {
-  if (process.env.USER_TYPE !== 'ant') return undefined
+/**
+ * Project-level GrowthBook overrides loaded from `.claude/gates.json`.
+ * Merged on top of global config overrides (project wins).
+ * Allows per-project fine-grained feature control without env vars.
+ *
+ * Example `.claude/gates.json`:
+ * {
+ *   "tengu_kairos_cron": true,
+ *   "tengu_onyx_plover": { "minHours": 12, "minSessions": 3 },
+ *   "tengu_hive_evidence": false
+ * }
+ */
+let projectOverrides: Record<string, unknown> | null | undefined = undefined
+
+function getProjectOverrides(): Record<string, unknown> | null {
+  if (projectOverrides !== undefined) return projectOverrides
   try {
-    return getGlobalConfig().growthBookOverrides
+    const { existsSync, readFileSync } = require('fs')
+    const { resolve } = require('path')
+    const gatesPath = resolve(process.cwd(), '.claude', 'gates.json')
+    if (existsSync(gatesPath)) {
+      const raw = readFileSync(gatesPath, 'utf-8')
+      const parsed = JSON.parse(raw)
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        projectOverrides = parsed as Record<string, unknown>
+        return projectOverrides
+      }
+    }
+    projectOverrides = null
+    return null
+  } catch {
+    projectOverrides = null
+    return null
+  }
+}
+
+function getConfigOverrides(): Record<string, unknown> | undefined {
+  // Zenfun: config overrides available to all users (not just ant).
+  // Global config overrides from ~/.claude.json
+  let globalOverrides: Record<string, unknown> | undefined
+  try {
+    globalOverrides = getGlobalConfig().growthBookOverrides
   } catch {
     // getGlobalConfig() throws before configReadingAllowed is set (early
     // main.tsx startup path). Same degrade as the disk-cache fallback below.
-    return undefined
+    globalOverrides = undefined
   }
+
+  // Project-level overrides from .claude/gates.json (higher priority)
+  const projOverrides = getProjectOverrides()
+
+  if (!globalOverrides && !projOverrides) return undefined
+  if (!projOverrides) return globalOverrides
+  if (!globalOverrides) return projOverrides
+  // Merge: project wins over global
+  return { ...globalOverrides, ...projOverrides }
 }
 
 /**
@@ -327,7 +374,7 @@ export function setGrowthBookConfigOverride(
   feature: string,
   value: unknown,
 ): void {
-  if (process.env.USER_TYPE !== 'ant') return
+  // Zenfun: config overrides available to all users (not just ant).
   try {
     saveGlobalConfig(c => {
       const current = c.growthBookOverrides ?? {}
@@ -352,7 +399,7 @@ export function setGrowthBookConfigOverride(
 }
 
 export function clearGrowthBookConfigOverrides(): void {
-  if (process.env.USER_TYPE !== 'ant') return
+  // Zenfun: config overrides available to all users (not just ant).
   try {
     saveGlobalConfig(c => {
       if (
@@ -1104,6 +1151,7 @@ export function resetGrowthBook(): void {
   initializeGrowthBook.cache?.clear?.()
   envOverrides = null
   envOverridesParsed = false
+  projectOverrides = undefined // reset project-level overrides cache
 }
 
 // Periodic refresh interval (matches Statsig's 6-hour interval)

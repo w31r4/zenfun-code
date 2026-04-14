@@ -8,7 +8,7 @@
  */
 import { existsSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'fs'
 import { builtinModules } from 'module'
-import { resolve, join } from 'path'
+import { extname, resolve, join } from 'path'
 
 // ── Feature flags ──
 // Full-feature build policy: enable every compile-time feature(...) gate found
@@ -17,9 +17,18 @@ const EXCLUDED_FEATURES = new Set([
   'ABLATION_BASELINE', // experiment control arm, not a user-facing capability
   'ALLOW_TEST_VERSIONS', // updater/dev test path
   'HARD_FAIL', // deliberate fault-injection behavior
+  'HISTORY_SNIP', // snip projection runtime is missing from this source drop
   'OVERFLOW_TEST_TOOL', // internal test tool
   'IS_LIBC_GLIBC', // platform marker (must not be globally forced on)
   'IS_LIBC_MUSL', // platform marker (must not be globally forced on)
+  'KAIROS', // assistant entrypoints are incomplete in this source drop
+  'KAIROS_DREAM', // bundled dream skill is missing from this source drop
+  'PROACTIVE', // proactive runtime modules are missing from this source drop
+  'REVIEW_ARTIFACT', // bundled hunter skill is missing from this source drop
+  'RUN_SKILL_GENERATOR', // bundled runSkillGenerator skill is missing
+  'UDS_INBOX', // UDS inbox runtime is incomplete in this source drop
+  'WEB_BROWSER_TOOL', // web browser tool runtime/UI is missing from this source drop
+  'WORKFLOW_SCRIPTS', // workflow tool/commands are incomplete in this source drop
 ])
 
 // ── Build-time macros ──
@@ -35,6 +44,8 @@ const MACROS: Record<string, string> = {
 }
 
 const STRICT_PARITY = process.env.CC_STRICT_PARITY === '1'
+const FEATURE_SHIM_SPECIFIER = '__zenfun_bun_bundle__'
+const PROJECT_ROOT = resolve('.')
 
 const stubbedImports = new Map<string, Set<string>>()
 const discoveredFeatureFlags = new Set<string>()
@@ -50,7 +61,12 @@ function recordStub(specifier: string, importer?: string) {
 // ── External npm packages to stub ──
 // Keep this empty by default. If a private/internal package is unavailable in
 // a local environment, add it here temporarily with a runtime fallback.
-const STUB_PACKAGES = new Set<string>()
+const STUB_PACKAGES = new Set<string>([
+  '@ant/computer-use-input',
+  '@ant/computer-use-mcp',
+  '@ant/computer-use-swift',
+  'audio-capture-napi',
+])
 
 // ── Pre-scan: collect all named imports per module specifier ──
 console.log('Pre-scanning imports...')
@@ -87,6 +103,17 @@ function scanDir(dir: string) {
       while ((m = defaultRe.exec(text)) !== null) {
         const mod = m[2]
         if (!allImports.has(mod)) allImports.set(mod, new Set())
+      }
+
+      // Also match CommonJS-style property access: require("...").Foo
+      const requirePropRe = /require\(\s*['"]([^'"]+)['"]\s*\)\.([A-Za-z_$][\w$]*)/g
+      while ((m = requirePropRe.exec(text)) !== null) {
+        const mod = m[1]
+        const prop = m[2]
+        if (!allImports.has(mod)) allImports.set(mod, new Set())
+        if (prop !== 'default') {
+          allImports.get(mod)!.add(prop)
+        }
       }
     }
   }
@@ -158,6 +185,9 @@ function generateStub(modulePath: string): string {
   const exports = [...names]
     .filter(n => /^[a-zA-Z_$]/.test(n))
     .map(n => {
+      if (/Tool$/.test(n)) {
+        return `export const ${n} = { name: ${JSON.stringify(n)}, aliases: [], isEnabled: () => false };`
+      }
       // UPPER_CASE names ending in S are likely arrays
       if (/^[A-Z][A-Z_]*S$/.test(n)) return `export const ${n} = [];`
       return `export const ${n} = noop;`
@@ -216,6 +246,32 @@ function resolveImportFile(importer: string | undefined, specifier: string): str
   return undefined
 }
 
+function getLoaderForFile(filePath: string): 'js' | 'jsx' | 'ts' | 'tsx' {
+  const extension = extname(filePath)
+  switch (extension) {
+    case '.tsx':
+      return 'tsx'
+    case '.ts':
+      return 'ts'
+    case '.jsx':
+      return 'jsx'
+    default:
+      return 'js'
+  }
+}
+
+function shouldRewriteProjectSource(filePath: string): boolean {
+  if (!filePath.startsWith(PROJECT_ROOT)) return false
+  if (filePath.includes('/node_modules/')) return false
+  return /\.(c|m)?[jt]sx?$/.test(filePath)
+}
+
+function rewriteBundleImport(contents: string): string {
+  return contents
+    .replaceAll("'bun:bundle'", `'${FEATURE_SHIM_SPECIFIER}'`)
+    .replaceAll('"bun:bundle"', `"${FEATURE_SHIM_SPECIFIER}"`)
+}
+
 // ── Build ──
 console.log('Building...')
 for (const staleFile of ['./dist/cli.js', './dist/cli.js.map']) {
@@ -259,9 +315,19 @@ const result = await Bun.build({
     {
       name: 'cc-build',
       setup(build) {
-        // 1. Shim bun:bundle
-        build.onResolve({ filter: /^bun:bundle$/ }, () => ({
-          path: 'bun:bundle',
+        // 1. Rewrite project sources so Bun does not intercept bun:bundle as a
+        // builtin macro before our feature shim sees it.
+        build.onLoad({ filter: /\.(c|m)?[jt]sx?$/ }, args => {
+          if (!shouldRewriteProjectSource(args.path)) return undefined
+          return {
+            contents: rewriteBundleImport(readFileSync(args.path, 'utf-8')),
+            loader: getLoaderForFile(args.path),
+          }
+        })
+
+        // 2. Shim compile-time feature() checks through a virtual module.
+        build.onResolve({ filter: /^(__zenfun_bun_bundle__|bun:bundle)$/ }, () => ({
+          path: FEATURE_SHIM_SPECIFIER,
           namespace: 'shim',
         }))
         build.onLoad({ filter: /.*/, namespace: 'shim' }, () => ({
@@ -271,10 +337,10 @@ const result = await Bun.build({
           loader: 'js',
         }))
 
-        // 2. Stub missing npm packages
+        // 3. Stub missing npm packages
         build.onResolve({ filter: /.*/ }, (args) => {
           if (args.path.startsWith('.') || args.path.startsWith('/') || args.path.startsWith('src/')) return undefined
-          if (args.path.startsWith('bun:')) return undefined
+          if (args.path.startsWith('bun:') || args.path === FEATURE_SHIM_SPECIFIER) return undefined
           const pkg = args.path.startsWith('@')
             ? args.path.split('/').slice(0, 2).join('/')
             : args.path.split('/')[0]
@@ -285,25 +351,26 @@ const result = await Bun.build({
           return undefined
         })
 
-        // 3. Stub src/ absolute imports
+        // 4. Stub src/ absolute imports
         build.onResolve({ filter: /^src\// }, (args) => {
           if (canResolveSrc(args.path)) return undefined
           recordStub(args.path, args.importer)
           return { path: args.path, namespace: 'stub' }
         })
 
-        // 3c. Resolve .md imports as inlined text; only stub if file is missing
-        build.onResolve({ filter: /\.md$/ }, (args) => {
+        // 4c. Resolve plain-text prompt/doc assets as inlined text; only stub
+        // if the file is missing from the source drop.
+        build.onResolve({ filter: /\.(md|txt)$/ }, (args) => {
           if (args.importer?.includes('node_modules')) return undefined
           const resolved = resolveImportFile(args.importer, args.path)
           if (resolved) {
-            return { path: resolved, namespace: 'md-text' }
+            return { path: resolved, namespace: 'text-inline' }
           }
           recordStub(args.path, args.importer)
-          return { path: args.path, namespace: 'stub-md' }
+          return { path: args.path, namespace: 'stub-text' }
         })
 
-        // 4. Stub missing relative imports (only in src/)
+        // 5. Stub missing relative imports (only in src/)
         build.onResolve({ filter: /^\./ }, (args) => {
           if (!args.importer || args.importer.includes('node_modules')) return undefined
           if (canResolveRelative(args.importer, args.path)) return undefined
@@ -311,17 +378,17 @@ const result = await Bun.build({
           return { path: args.path, namespace: 'stub' }
         })
 
-        // 5. Markdown loader / fallback stub
-        build.onLoad({ filter: /.*/, namespace: 'md-text' }, (args) => ({
+        // 6. Plain-text loader / fallback stub
+        build.onLoad({ filter: /.*/, namespace: 'text-inline' }, (args) => ({
           contents: `export default ${JSON.stringify(readFileSync(args.path, 'utf-8'))};`,
           loader: 'js',
         }))
-        build.onLoad({ filter: /.*/, namespace: 'stub-md' }, () => ({
+        build.onLoad({ filter: /.*/, namespace: 'stub-text' }, () => ({
           contents: 'export default "";',
           loader: 'js',
         }))
 
-        // 6. Stub loader
+        // 7. Stub loader
         build.onLoad({ filter: /.*/, namespace: 'stub' }, (args) => ({
           contents: generateStub(args.path),
           loader: 'js',
