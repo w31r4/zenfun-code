@@ -7,10 +7,11 @@ cd "$ROOT_DIR"
 CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/node"
 mkdir -p "$CACHE_DIR"
 
-# Full-feature local default: enable boolean GrowthBook gates unless explicitly
-# turned off by caller (CLAUDE_CODE_ENABLE_ALL_GATES=0).
-: "${CLAUDE_CODE_ENABLE_ALL_GATES:=1}"
-export CLAUDE_CODE_ENABLE_ALL_GATES
+# Keep runtime gate behavior aligned with the public CLI by default.
+# Callers can still opt in explicitly with CLAUDE_CODE_ENABLE_ALL_GATES=1.
+if [[ -z "${CLAUDE_CODE_GB_OVERRIDES:-}" ]]; then
+  export CLAUDE_CODE_GB_OVERRIDES='{"tengu_auto_mode_config":{"enabled":"enabled","disableFastMode":false,"allowModels":["sonnet","opus","claude-sonnet-4-5","claude-sonnet-4-6","claude-opus-4-1","claude-opus-4-5","claude-opus-4-6"]}}'
+fi
 
 # Remove potentially broken localstorage flags inherited from NODE_OPTIONS.
 if [[ -n "${NODE_OPTIONS:-}" ]]; then

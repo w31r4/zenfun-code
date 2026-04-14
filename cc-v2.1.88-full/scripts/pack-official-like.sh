@@ -71,6 +71,7 @@ cat > "$OUT_DIR/package.json" <<'JSON'
     "zod": "^4.3.6",
     "@anthropic-ai/sandbox-runtime": "^0.0.44",
     "@anthropic-ai/mcpb": "^2.1.2",
+    "@growthbook/growthbook": "^1.6.5",
     "@aws-sdk/credential-providers": "^3.1020.0",
     "cacache": "^20.0.4",
     "cli-highlight": "^2.1.11",
@@ -109,10 +110,11 @@ ROOT_DIR="$(cd "$(dirname "$SCRIPT_PATH")/.." && pwd)"
 CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/node"
 mkdir -p "$CACHE_DIR"
 
-# Full-feature local default: enable boolean GrowthBook gates unless explicitly
-# turned off by caller (CLAUDE_CODE_ENABLE_ALL_GATES=0).
-: "${CLAUDE_CODE_ENABLE_ALL_GATES:=1}"
-export CLAUDE_CODE_ENABLE_ALL_GATES
+# Keep runtime gate behavior aligned with the public CLI by default.
+# Callers can still opt in explicitly with CLAUDE_CODE_ENABLE_ALL_GATES=1.
+if [[ -z "${CLAUDE_CODE_GB_OVERRIDES:-}" ]]; then
+  export CLAUDE_CODE_GB_OVERRIDES='{"tengu_auto_mode_config":{"enabled":"enabled","disableFastMode":false,"allowModels":["sonnet","opus","claude-sonnet-4-5","claude-sonnet-4-6","claude-opus-4-1","claude-opus-4-5","claude-opus-4-6"]}}'
+fi
 
 # Remove potentially broken localstorage flags inherited from NODE_OPTIONS.
 if [[ -n "${NODE_OPTIONS:-}" ]]; then
