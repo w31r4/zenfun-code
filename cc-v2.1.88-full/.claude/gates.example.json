@@ -1,0 +1,87 @@
+{
+  "_comment": [
+    "GrowthBook gates override file for Claude Code v2.1.88-dev.",
+    "Copy to .claude/gates.json to activate.",
+    "",
+    "Default behavior (without this file): all boolean gates are ON.",
+    "This file is only needed to DISABLE specific gates or to set",
+    "non-boolean dynamic configs to custom values.",
+    "",
+    "Priority chain: gates.json > ~/.claude.json > CLAUDE_CODE_GB_OVERRIDES env",
+    "                > CLAUDE_CODE_ENABLE_ALL_GATES auto-on > GrowthBook remote"
+  ],
+
+  "_kill_switches_DO_NOT_ENABLE": {
+    "_comment": "These are kill switches / disable toggles. true = feature DISABLED.",
+    "tengu_amber_quartz_disabled": false,
+    "tengu_compact_line_prefix_killswitch": false,
+    "tengu_read_dedup_killswitch": false,
+    "tengu_disable_keepalive_on_econnreset": false,
+    "tengu_disable_streaming_to_non_streaming_fallback": false,
+    "tengu_penguins_off": false
+  },
+
+  "_boolean_gates_auto_enabled": {
+    "_comment": "These are already force-enabled by CLAUDE_CODE_ENABLE_ALL_GATES=true. Listed for reference only. Uncomment and set to false to selectively disable.",
+    "tengu_amber_stoat": "auto (explore/plan agents)",
+    "tengu_turtle_carbon": "auto (ultrathink)",
+    "tengu_hive_evidence": "auto (verification agent)",
+    "tengu_kairos_brief": "auto (brief/SendUserMessage)",
+    "tengu_kairos_cron": "auto (cron scheduling)",
+    "tengu_surreal_dali": "auto (remote triggers)",
+    "tengu_copper_panda": "auto (skill improvement)",
+    "tengu_onyx_plover_enabled": "auto (auto-dream enabled gate)",
+    "tengu_cobalt_raccoon": "auto (reactive compact)",
+    "tengu_sedge_lantern": "auto (away summary)",
+    "tengu_cobalt_harbor": "auto (CCR auto-connect)",
+    "tengu_ccr_mirror": "auto (CCR mirror)",
+    "tengu_ccr_bridge": "auto (remote control bridge)",
+    "tengu_terminal_panel": "auto (terminal panel Cmd+J)",
+    "tengu_anti_distill_fake_tool_injection": "auto (anti-distillation)",
+    "tengu_auto_background_agents": "auto (background agent execution)",
+    "tengu_session_memory": "auto (session memory)",
+    "tengu_scratch": "auto (coordinator mode)",
+    "tengu_harbor": "auto (interactive helpers)",
+    "tengu_collage_kaleidoscope": "auto (native clipboard image, default true)",
+    "tengu_attribution_header": "auto (commit attribution header, default true)",
+    "tengu_slim_subagent_claudemd": "auto (slim subagent CLAUDE.md, default true)",
+    "tengu_birch_trellis": "auto (default true)",
+    "tengu_amber_flint": "auto (default true)"
+  },
+
+  "_dynamic_configs": {
+    "_comment": "Non-boolean configs are NOT auto-enabled. Set explicit values here if needed.",
+
+    "tengu_onyx_plover": {
+      "_doc": "Auto-dream thresholds",
+      "_default": { "minHours": 24, "minSessions": 5 },
+      "_aggressive": { "minHours": 6, "minSessions": 2 }
+    },
+
+    "tengu_kairos_brief_config": {
+      "_doc": "Brief command visibility",
+      "_default": { "enable_slash_command": false },
+      "_enabled": { "enable_slash_command": true }
+    },
+
+    "tengu_desktop_upsell": {
+      "_doc": "Desktop app upsell dialogs",
+      "_default": { "enable_shortcut_tip": false, "enable_startup_dialog": false }
+    },
+
+    "tengu_cicada_nap_ms": {
+      "_doc": "Nap duration in ms (number, not boolean)",
+      "_default": 0
+    },
+
+    "tengu_ultraplan_model": {
+      "_doc": "Model config for ultraplan remote sessions (string/object)"
+    },
+
+    "tengu_willow_mode": {
+      "_doc": "Willow mode setting",
+      "_default": "off",
+      "_options": ["off", "on"]
+    }
+  }
+}
